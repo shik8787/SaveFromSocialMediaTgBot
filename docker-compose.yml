@@ -1,0 +1,22 @@
+services:
+  bot:
+    image: shik8787/savefromsocialmediatgbot:arm64
+    container_name: savefromsocialmedia-bot
+    env_file:
+      - .env
+    environment:
+      REDIS_CONNECTION_STRING: redis:6379,abortConnect=false
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: savefromsocialmedia-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+volumes:
+  redis-data:

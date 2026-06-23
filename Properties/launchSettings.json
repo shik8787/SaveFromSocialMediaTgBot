@@ -1,0 +1,15 @@
+﻿{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "TgBotVideoSender": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development",
+        "TOKEN": "",
+        "TWITTER_TOKEN": "",
+        "RETRY_COUNT": ""
+      }
+    }
+  }
+}
