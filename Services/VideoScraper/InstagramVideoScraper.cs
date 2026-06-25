@@ -67,6 +67,7 @@ public class InstagramVideoScraper(
     private async Task<IReadOnlyList<(string Url, MediaType Type)>> TryGetMediaUrlsAsync(string pageUrl)
     {
         pageUrl = NormalizePageUrl(pageUrl);
+        var linkType = GetInstagramLinkType(pageUrl);
 
         await using var browser = await Puppeteer.LaunchAsync(launchOptions);
         await using var page = await browser.NewPageAsync();
@@ -83,7 +84,7 @@ public class InstagramVideoScraper(
                 var content = await page.GetContentAsync();
                 content = DecodeContent(content);
 
-                var media = ExtractMediaUrls(content);
+                var media = ExtractMediaUrls(content, linkType);
                 if (media.Count > 0)
                 {
                     logger.LogInformation("{MediaCount} media item(s) extracted on attempt {Attempt} for {Url}",
@@ -126,7 +127,23 @@ public class InstagramVideoScraper(
         }
     }
 
-    private List<(string Url, MediaType Type)> ExtractMediaUrls(string content)
+    private List<(string Url, MediaType Type)> ExtractMediaUrls(string content, InstagramLinkType linkType)
+    {
+        if (linkType == InstagramLinkType.ReelOrTv)
+            return ExtractSingleVideoUrl(content);
+
+        return ExtractPostMediaUrls(content);
+    }
+
+    private List<(string Url, MediaType Type)> ExtractSingleVideoUrl(string content)
+    {
+        var match = videoPattern.Match(content);
+        return match.Success
+            ? [(match.Groups["url"].Value, MediaType.Video)]
+            : [];
+    }
+
+    private List<(string Url, MediaType Type)> ExtractPostMediaUrls(string content)
     {
         var matches = new List<(int Index, string Url, MediaType Type)>();
         var isCarousel = IsCarouselContent(content);
@@ -164,6 +181,25 @@ public class InstagramVideoScraper(
         return content.Contains("edge_sidecar_to_children", StringComparison.OrdinalIgnoreCase)
                || content.Contains("carousel_media", StringComparison.OrdinalIgnoreCase)
                || content.Contains("GraphSidecar", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static InstagramLinkType GetInstagramLinkType(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return InstagramLinkType.Unknown;
+
+        var path = uri.AbsolutePath;
+
+        if (path.StartsWith("/reel/", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith("/tv/", StringComparison.OrdinalIgnoreCase))
+        {
+            return InstagramLinkType.ReelOrTv;
+        }
+
+        if (path.StartsWith("/p/", StringComparison.OrdinalIgnoreCase))
+            return InstagramLinkType.Post;
+
+        return InstagramLinkType.Unknown;
     }
 
     private async Task SetCookiesAsync(IPage page)
@@ -259,5 +295,12 @@ public class InstagramVideoScraper(
         var fullyDecoded = HttpUtility.HtmlDecode(unescaped);
         fullyDecoded = fullyDecoded.Replace("\\/", "/");
         return fullyDecoded;
+    }
+
+    private enum InstagramLinkType
+    {
+        Unknown,
+        Post,
+        ReelOrTv
     }
 }
