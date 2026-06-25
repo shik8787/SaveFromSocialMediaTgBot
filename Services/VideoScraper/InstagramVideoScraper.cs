@@ -34,22 +34,31 @@ public class InstagramVideoScraper(
 
     public bool CanHandle(string url) => url.Contains("instagram.com", StringComparison.OrdinalIgnoreCase);
 
+    private const int MAX_TELEGRAM_ALBUM_ITEMS = 10;
+
     public async Task<ScrapedMedia> GetMediaAsync(string url)
     {
         logger.LogInformation("Start processing {Url}", url);
 
-        var media = await TryGetMediaUrlAsync(url) ?? throw new FormatException(MessageConstants.ERROR_EMPTY_URL);
+        var media = await TryGetMediaUrlsAsync(url);
+        if (media.Count == 0)
+            throw new FormatException(MessageConstants.ERROR_EMPTY_URL);
 
-        logger.LogInformation("{MediaType} URL resolved for {Url}", media.Type, url);
+        logger.LogInformation("{MediaCount} media URL(s) resolved for {Url}", media.Count, url);
 
-        var stream = await client.GetStreamAsync(media.Url);
+        var items = new List<ScrapedMediaItem>();
+        foreach (var item in media)
+        {
+            var stream = await client.GetStreamAsync(item.Url);
+            items.Add(new ScrapedMediaItem(stream, item.Type));
+        }
 
-        logger.LogInformation("Stream opened successfully for {Url}", url);
+        logger.LogInformation("{MediaCount} stream(s) opened successfully for {Url}", items.Count, url);
 
-        return new ScrapedMedia(stream, media.Type);
+        return new ScrapedMedia(items);
     }
 
-    private async Task<(string Url, MediaType Type)?> TryGetMediaUrlAsync(string pageUrl)
+    private async Task<IReadOnlyList<(string Url, MediaType Type)>> TryGetMediaUrlsAsync(string pageUrl)
     {
         await using var browser = await Puppeteer.LaunchAsync(launchOptions);
         await using var page = await browser.NewPageAsync();
@@ -66,21 +75,12 @@ public class InstagramVideoScraper(
                 var content = await page.GetContentAsync();
                 content = DecodeContent(content);
 
-                var videoMatch = videoPattern.Match(content);
-                if (videoMatch.Success)
+                var media = ExtractMediaUrls(content);
+                if (media.Count > 0)
                 {
-                    logger.LogInformation("Video extracted on attempt {Attempt} for {Url}", attempt, pageUrl);
-                    return (videoMatch.Groups["url"].Value, MediaType.Video);
-                }
-
-                var photoMatch = photoPattern.Match(content);
-                if (!photoMatch.Success)
-                    photoMatch = displayPhotoPattern.Match(content);
-
-                if (photoMatch.Success)
-                {
-                    logger.LogInformation("Photo extracted on attempt {Attempt} for {Url}", attempt, pageUrl);
-                    return (photoMatch.Groups["url"].Value, MediaType.Photo);
+                    logger.LogInformation("{MediaCount} media item(s) extracted on attempt {Attempt} for {Url}",
+                        media.Count, attempt, pageUrl);
+                    return media;
                 }
 
                 if (attempt == 1)
@@ -90,13 +90,38 @@ public class InstagramVideoScraper(
                 }
             }
 
-            return null;
+            return [];
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Metadata fetch failed for {Url}", pageUrl);
             throw;
         }
+    }
+
+    private List<(string Url, MediaType Type)> ExtractMediaUrls(string content)
+    {
+        var matches = new List<(int Index, string Url, MediaType Type)>();
+
+        matches.AddRange(videoPattern.Matches(content)
+            .Select(match => (match.Index, match.Groups["url"].Value, MediaType.Video)));
+
+        matches.AddRange(photoPattern.Matches(content)
+            .Select(match => (match.Index, match.Groups["url"].Value, MediaType.Photo)));
+
+        if (matches.Count == 0)
+        {
+            matches.AddRange(displayPhotoPattern.Matches(content)
+                .Select(match => (match.Index, match.Groups["url"].Value, MediaType.Photo)));
+        }
+
+        return matches
+            .Where(x => !string.IsNullOrWhiteSpace(x.Url))
+            .OrderBy(x => x.Index)
+            .DistinctBy(x => x.Url)
+            .Take(MAX_TELEGRAM_ALBUM_ITEMS)
+            .Select(x => (x.Url, x.Type))
+            .ToList();
     }
 
     private async Task SetCookiesAsync(IPage page)

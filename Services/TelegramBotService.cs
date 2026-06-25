@@ -187,6 +187,28 @@ public class TelegramBotService(
 
         var media = await scraperService.GetMediaAsync(message.VideoLink!);
 
+        if (media.Items.Count == 1)
+        {
+            await SendSingleMediaAsync(client, message, media.Items[0], ct);
+        }
+        else
+        {
+            await SendMediaGroupAsync(client, message, media.Items, ct);
+        }
+
+        await client.SetMessageReaction(message.ChatId, message.Id, ["\ud83d\udcaf"],
+            cancellationToken: ct);
+        
+        if (message.Settings.DeleteOriginMessage)
+            await client.DeleteMessage(message.ChatId, message.Id, ct);
+    }
+
+    private static async Task SendSingleMediaAsync(
+        ITelegramBotClient client,
+        ParsedMessage message,
+        ScrapedMediaItem media,
+        CancellationToken ct)
+    {
         switch (media.Type)
         {
             case MediaType.Video:
@@ -207,11 +229,26 @@ public class TelegramBotService(
                     cancellationToken: ct);
                 break;
         }
+    }
 
-        await client.SetMessageReaction(message.ChatId, message.Id, ["\ud83d\udcaf"],
+    private static async Task SendMediaGroupAsync(
+        ITelegramBotClient client,
+        ParsedMessage message,
+        IReadOnlyList<ScrapedMediaItem> media,
+        CancellationToken ct)
+    {
+        var album = media.Select<ScrapedMediaItem, IAlbumInputMedia>((item, index) => item.Type switch
+        {
+            MediaType.Video => new InputMediaVideo(InputFile.FromStream(item.Stream, $"video-{index}.mp4")),
+            MediaType.Photo => new InputMediaPhoto(InputFile.FromStream(item.Stream, $"photo-{index}.jpg")),
+            _ => throw new ArgumentOutOfRangeException(nameof(item.Type), item.Type, null)
+        }).ToArray();
+
+        await client.SendMediaGroup(
+            chatId: message.ChatId,
+            media: album,
+            messageThreadId: message.TreadId,
+            disableNotification: message.Settings.Notification,
             cancellationToken: ct);
-        
-        if (message.Settings.DeleteOriginMessage)
-            await client.DeleteMessage(message.ChatId, message.Id, ct);
     }
 }
