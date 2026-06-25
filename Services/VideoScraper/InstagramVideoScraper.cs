@@ -20,7 +20,13 @@ public class InstagramVideoScraper(
     private readonly string login = configuration[EnvironmentConstants.INST_LOGIN] ?? "";
     private readonly string password = configuration[EnvironmentConstants.INST_PASSWORD] ?? "";
     private string sessionId = configuration[EnvironmentConstants.INST_COOKIE_SESSION_ID] ?? "";
-    private readonly NavigationOptions navigationOptions = new() { WaitUntil = [WaitUntilNavigation.DOMContentLoaded] };
+    private const int NAVIGATION_TIMEOUT_MS = 90_000;
+    private readonly NavigationOptions navigationOptions = new()
+    {
+        WaitUntil = [WaitUntilNavigation.DOMContentLoaded],
+        Timeout = NAVIGATION_TIMEOUT_MS
+    };
+    private readonly WaitForSelectorOptions selectorOptions = new() { Timeout = 30_000 };
     private readonly TypeOptions typeOptions = new() { Delay = 150 };
 
     private readonly LaunchOptions launchOptions = new()
@@ -60,6 +66,8 @@ public class InstagramVideoScraper(
 
     private async Task<IReadOnlyList<(string Url, MediaType Type)>> TryGetMediaUrlsAsync(string pageUrl)
     {
+        pageUrl = NormalizePageUrl(pageUrl);
+
         await using var browser = await Puppeteer.LaunchAsync(launchOptions);
         await using var page = await browser.NewPageAsync();
 
@@ -85,8 +93,24 @@ public class InstagramVideoScraper(
 
                 if (attempt == 1)
                 {
+                    if (string.IsNullOrWhiteSpace(login) || string.IsNullOrWhiteSpace(password))
+                    {
+                        logger.LogWarning(
+                            "Media not found for {Url}, and Instagram credentials are not configured; skipping re-authorization",
+                            pageUrl);
+                        break;
+                    }
+
                     logger.LogDebug("Media not found, re-authorizing for {Url}", pageUrl);
-                    await page.SetCookieAsync(await AuthorizationAsync(page));
+                    try
+                    {
+                        await page.SetCookieAsync(await AuthorizationAsync(page));
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Instagram re-authorization failed for {Url}", pageUrl);
+                        break;
+                    }
                 }
             }
 
@@ -140,28 +164,51 @@ public class InstagramVideoScraper(
 
             sessionId = string.Empty;
         }
-        await page.SetCookieAsync(Cookies);
+        if (Cookies is not null)
+            await page.SetCookieAsync(Cookies);
     }
 
     private async Task<CookieParam[]> AuthorizationAsync(IPage page)
     {
         logger.LogInformation("Re-authorizing Instagram session");
 
-        await page.GoToAsync("https://www.instagram.com/accounts/login/");
-        await page.WaitForSelectorAsync("input[name='username']");
-        await page.WaitForSelectorAsync("input[name='password']");
+        await page.GoToAsync("https://www.instagram.com/accounts/login/", navigationOptions);
+        await page.WaitForSelectorAsync("input[name='username']", selectorOptions);
+        await page.WaitForSelectorAsync("input[name='password']", selectorOptions);
         await Task.Delay(random.Next(800, 1000));
         await page.TypeAsync("input[name='username']", login, typeOptions);
         await Task.Delay(random.Next(500, 1000));
         await page.TypeAsync("input[name='password']", password, typeOptions);
         await Task.Delay(random.Next(500, 1000));
         await page.ClickAsync("button[type='submit']");
-        await page.WaitForNavigationAsync(navigationOptions);
+        try
+        {
+            await page.WaitForNavigationAsync(navigationOptions);
+        }
+        catch (TimeoutException)
+        {
+            logger.LogWarning("Instagram login navigation timeout; using cookies collected after submit");
+        }
+
         Cookies = await page.GetCookiesAsync();
 
         logger.LogInformation("Instagram re-authorization successful");
 
         return Cookies;
+    }
+
+    private static string NormalizePageUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return url;
+
+        var builder = new UriBuilder(uri)
+        {
+            Query = string.Empty,
+            Fragment = string.Empty
+        };
+
+        return builder.Uri.ToString();
     }
 
     private string DecodeContent(string rawContent)
