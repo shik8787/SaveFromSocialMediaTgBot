@@ -129,9 +129,13 @@ public class InstagramVideoScraper(
     private List<(string Url, MediaType Type)> ExtractMediaUrls(string content)
     {
         var matches = new List<(int Index, string Url, MediaType Type)>();
+        var isCarousel = IsCarouselContent(content);
 
         matches.AddRange(videoPattern.Matches(content)
             .Select(match => (match.Index, match.Groups["url"].Value, MediaType.Video)));
+
+        if (!isCarousel && matches.Count > 0)
+            return [matches.OrderBy(x => x.Index).Select(x => (x.Url, x.Type)).First()];
 
         matches.AddRange(photoPattern.Matches(content)
             .Select(match => (match.Index, match.Groups["url"].Value, MediaType.Photo)));
@@ -142,13 +146,24 @@ public class InstagramVideoScraper(
                 .Select(match => (match.Index, match.Groups["url"].Value, MediaType.Photo)));
         }
 
-        return matches
+        var result = matches
             .Where(x => !string.IsNullOrWhiteSpace(x.Url))
             .OrderBy(x => x.Index)
             .DistinctBy(x => x.Url)
             .Take(MAX_TELEGRAM_ALBUM_ITEMS)
             .Select(x => (x.Url, x.Type))
             .ToList();
+
+        return isCarousel
+            ? result
+            : result.Take(1).ToList();
+    }
+
+    private static bool IsCarouselContent(string content)
+    {
+        return content.Contains("edge_sidecar_to_children", StringComparison.OrdinalIgnoreCase)
+               || content.Contains("carousel_media", StringComparison.OrdinalIgnoreCase)
+               || content.Contains("GraphSidecar", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task SetCookiesAsync(IPage page)
