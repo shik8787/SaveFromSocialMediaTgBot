@@ -66,8 +66,8 @@ public class InstagramVideoScraper(
 
     private async Task<IReadOnlyList<(string Url, MediaType Type)>> TryGetMediaUrlsAsync(string pageUrl)
     {
-        pageUrl = NormalizePageUrl(pageUrl);
         var linkType = GetInstagramLinkType(pageUrl);
+        pageUrl = NormalizePageUrl(pageUrl);
 
         await using var browser = await Puppeteer.LaunchAsync(launchOptions);
         await using var page = await browser.NewPageAsync();
@@ -129,7 +129,7 @@ public class InstagramVideoScraper(
 
     private List<(string Url, MediaType Type)> ExtractMediaUrls(string content, InstagramLinkType linkType)
     {
-        if (linkType == InstagramLinkType.ReelOrTv)
+        if (linkType == InstagramLinkType.Video)
             return ExtractSingleVideoUrl(content);
 
         return ExtractPostMediaUrls(content);
@@ -190,16 +190,23 @@ public class InstagramVideoScraper(
 
         var path = uri.AbsolutePath;
 
+        if (HasImageIndex(uri))
+            return InstagramLinkType.PhotoPost;
+
         if (path.StartsWith("/reel/", StringComparison.OrdinalIgnoreCase)
-            || path.StartsWith("/tv/", StringComparison.OrdinalIgnoreCase))
+            || path.StartsWith("/tv/", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith("/p/", StringComparison.OrdinalIgnoreCase))
         {
-            return InstagramLinkType.ReelOrTv;
+            return InstagramLinkType.Video;
         }
 
-        if (path.StartsWith("/p/", StringComparison.OrdinalIgnoreCase))
-            return InstagramLinkType.Post;
-
         return InstagramLinkType.Unknown;
+    }
+
+    private static bool HasImageIndex(Uri uri)
+    {
+        var query = HttpUtility.ParseQueryString(uri.Query);
+        return !string.IsNullOrWhiteSpace(query["img_index"]);
     }
 
     private async Task SetCookiesAsync(IPage page)
@@ -300,7 +307,7 @@ public class InstagramVideoScraper(
     private enum InstagramLinkType
     {
         Unknown,
-        Post,
-        ReelOrTv
+        Video,
+        PhotoPost
     }
 }
