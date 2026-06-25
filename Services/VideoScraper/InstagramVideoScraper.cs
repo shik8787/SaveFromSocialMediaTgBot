@@ -3,6 +3,7 @@ using System.Web;
 using PuppeteerSharp;
 using PuppeteerSharp.Input;
 using SaveFromSocialMediaTgBot.Data.Constants;
+using SaveFromSocialMediaTgBot.Data.Models;
 using SaveFromSocialMediaTgBot.Interfaces;
 
 namespace SaveFromSocialMediaTgBot.Services.VideoScraper;
@@ -13,7 +14,9 @@ public class InstagramVideoScraper(
     HttpClient client) : IVideoScraper
 {
     private readonly Random random = new();
-    private readonly Regex pattern = new(PatternConstants.INSTAGRAM, RegexOptions.IgnoreCase | RegexOptions.Singleline);
+    private readonly Regex videoPattern = new(PatternConstants.INSTAGRAM, RegexOptions.IgnoreCase | RegexOptions.Singleline);
+    private readonly Regex photoPattern = new(PatternConstants.INSTAGRAM_PHOTO, RegexOptions.IgnoreCase | RegexOptions.Singleline);
+    private readonly Regex displayPhotoPattern = new(PatternConstants.INSTAGRAM_DISPLAY_PHOTO, RegexOptions.IgnoreCase | RegexOptions.Singleline);
     private readonly string login = configuration[EnvironmentConstants.INST_LOGIN] ?? "";
     private readonly string password = configuration[EnvironmentConstants.INST_PASSWORD] ?? "";
     private string sessionId = configuration[EnvironmentConstants.INST_COOKIE_SESSION_ID] ?? "";
@@ -31,22 +34,22 @@ public class InstagramVideoScraper(
 
     public bool CanHandle(string url) => url.Contains("instagram.com", StringComparison.OrdinalIgnoreCase);
 
-    public async Task<Stream> GetVideoStreamAsync(string url)
+    public async Task<ScrapedMedia> GetMediaAsync(string url)
     {
         logger.LogInformation("Start processing {Url}", url);
 
-        var videoUrl = await TryGetVideoUrlAsync(url) ?? throw new FormatException(MessageConstants.ERROR_EMPTY_URL);
+        var media = await TryGetMediaUrlAsync(url) ?? throw new FormatException(MessageConstants.ERROR_EMPTY_URL);
 
-        logger.LogInformation("Video URL resolved for {Url}", url);
+        logger.LogInformation("{MediaType} URL resolved for {Url}", media.Type, url);
 
-        var stream = await client.GetStreamAsync(videoUrl);
+        var stream = await client.GetStreamAsync(media.Url);
 
         logger.LogInformation("Stream opened successfully for {Url}", url);
 
-        return stream;
+        return new ScrapedMedia(stream, media.Type);
     }
 
-    private async Task<string?> TryGetVideoUrlAsync(string pageUrl)
+    private async Task<(string Url, MediaType Type)?> TryGetMediaUrlAsync(string pageUrl)
     {
         await using var browser = await Puppeteer.LaunchAsync(launchOptions);
         await using var page = await browser.NewPageAsync();
@@ -63,15 +66,26 @@ public class InstagramVideoScraper(
                 var content = await page.GetContentAsync();
                 content = DecodeContent(content);
 
-                var match = pattern.Match(content);
-                if (match.Success)
+                var videoMatch = videoPattern.Match(content);
+                if (videoMatch.Success)
                 {
                     logger.LogInformation("Video extracted on attempt {Attempt} for {Url}", attempt, pageUrl);
-                    return match.Groups[1].Value;
+                    return (videoMatch.Groups["url"].Value, MediaType.Video);
                 }
+
+                var photoMatch = photoPattern.Match(content);
+                if (!photoMatch.Success)
+                    photoMatch = displayPhotoPattern.Match(content);
+
+                if (photoMatch.Success)
+                {
+                    logger.LogInformation("Photo extracted on attempt {Attempt} for {Url}", attempt, pageUrl);
+                    return (photoMatch.Groups["url"].Value, MediaType.Photo);
+                }
+
                 if (attempt == 1)
                 {
-                    logger.LogDebug("Video not found, re-authorizing for {Url}", pageUrl);
+                    logger.LogDebug("Media not found, re-authorizing for {Url}", pageUrl);
                     await page.SetCookieAsync(await AuthorizationAsync(page));
                 }
             }

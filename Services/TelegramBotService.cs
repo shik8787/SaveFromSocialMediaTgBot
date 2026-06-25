@@ -185,14 +185,28 @@ public class TelegramBotService(
         await client.SetMessageReaction(message.ChatId, message.Id, ["\ud83d\udc40"],
             cancellationToken: ct);
 
-        var videoStream = await scraperService.GetVideoStreamAsync(message.VideoLink!);
+        var media = await scraperService.GetMediaAsync(message.VideoLink!);
 
-        await client.SendVideo(
-            chatId: message.ChatId,
-            video: videoStream,
-            messageThreadId: message.TreadId,
-            disableNotification: message.Settings.Notification,
-            cancellationToken: ct);
+        switch (media.Type)
+        {
+            case MediaType.Video:
+                await client.SendVideo(
+                    chatId: message.ChatId,
+                    video: media.Stream,
+                    messageThreadId: message.TreadId,
+                    disableNotification: message.Settings.Notification,
+                    cancellationToken: ct);
+                break;
+
+            case MediaType.Photo:
+                await client.SendPhoto(
+                    chatId: message.ChatId,
+                    photo: media.Stream,
+                    messageThreadId: message.TreadId,
+                    disableNotification: message.Settings.Notification,
+                    cancellationToken: ct);
+                break;
+        }
 
         await client.SetMessageReaction(message.ChatId, message.Id, ["\ud83d\udcaf"],
             cancellationToken: ct);

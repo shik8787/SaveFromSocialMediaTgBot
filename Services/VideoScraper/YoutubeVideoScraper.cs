@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using SaveFromSocialMediaTgBot.Data.Constants;
+using SaveFromSocialMediaTgBot.Data.Models;
 using SaveFromSocialMediaTgBot.Interfaces;
 
 namespace SaveFromSocialMediaTgBot.Services.VideoScraper;
@@ -13,10 +14,11 @@ public class YoutubeVideoScraper(HttpClient client) : IVideoScraper
 
     public bool CanHandle(string url) => url.Contains("youtube.com/shorts", StringComparison.OrdinalIgnoreCase);
 
-    public async Task<Stream> GetVideoStreamAsync(string url)
+    public async Task<ScrapedMedia> GetMediaAsync(string url)
     {
         var videoUrl = await GetVideoUrlsAsync(url);
-        return await client.GetStreamAsync(videoUrl);
+        var stream = await client.GetStreamAsync(videoUrl);
+        return new ScrapedMedia(stream, MediaType.Video);
     }
 
     private async Task<string> GetVideoUrlsAsync(string url)

@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using SaveFromSocialMediaTgBot.Data.Constants;
+using SaveFromSocialMediaTgBot.Data.Models;
 using SaveFromSocialMediaTgBot.Interfaces;
 
 namespace SaveFromSocialMediaTgBot.Services.VideoScraper;
@@ -59,7 +60,7 @@ public class TwitterVideoScraper(
     public bool CanHandle(string url) => url.Contains("twitter", StringComparison.OrdinalIgnoreCase) ||
                                          url.Contains("x.com", StringComparison.OrdinalIgnoreCase);
 
-    public async Task<Stream> GetVideoStreamAsync(string url)
+    public async Task<ScrapedMedia> GetMediaAsync(string url)
     {
         logger.LogInformation("Start processing {Url}", url);
 
@@ -73,7 +74,7 @@ public class TwitterVideoScraper(
         
         logger.LogInformation("Stream opened successfully for {Url}", url);
 
-        return stream;
+        return new ScrapedMedia(stream, MediaType.Video);
     }
 
     private async Task<List<string>> GetVideoUrlsAsync(string postId)

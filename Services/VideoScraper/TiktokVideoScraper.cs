@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using SaveFromSocialMediaTgBot.Data.Constants;
+using SaveFromSocialMediaTgBot.Data.Models;
 using SaveFromSocialMediaTgBot.Interfaces;
 
 namespace SaveFromSocialMediaTgBot.Services.VideoScraper;
@@ -16,7 +17,7 @@ public class TiktokVideoScraper(
 
     public bool CanHandle(string url) => url.Contains("tiktok", StringComparison.OrdinalIgnoreCase);
 
-    public async Task<Stream> GetVideoStreamAsync(string url)
+    public async Task<ScrapedMedia> GetMediaAsync(string url)
     {
         logger.LogInformation("Start processing {Url}", url);
 
@@ -34,7 +35,7 @@ public class TiktokVideoScraper(
 
         logger.LogInformation("Stream opened successfully for {Url}", url);
 
-        return stream;
+        return new ScrapedMedia(stream, MediaType.Video);
     }
 
     private async Task<string?> GetVideoLinkAsync(HttpClient httpClient, string url)
