@@ -93,10 +93,13 @@ public class InstagramVideoScraper(
 
                 if (attempt == 1)
                 {
-                    if (string.IsNullOrWhiteSpace(login) || string.IsNullOrWhiteSpace(password))
+                    var hasCredentials = !string.IsNullOrWhiteSpace(login) && !string.IsNullOrWhiteSpace(password);
+                    var hasCookies = Cookies is { Length: > 0 };
+
+                    if (!hasCredentials && !hasCookies)
                     {
                         logger.LogWarning(
-                            "Media not found for {Url}, and Instagram credentials are not configured; skipping re-authorization",
+                            "Media not found for {Url}, and Instagram credentials/cookies are not configured; skipping re-authorization",
                             pageUrl);
                         break;
                     }
@@ -173,8 +176,32 @@ public class InstagramVideoScraper(
         logger.LogInformation("Re-authorizing Instagram session");
 
         await page.GoToAsync("https://www.instagram.com/accounts/login/", navigationOptions);
-        await page.WaitForSelectorAsync("input[name='username']", selectorOptions);
-        await page.WaitForSelectorAsync("input[name='password']", selectorOptions);
+
+        try
+        {
+            await page.WaitForSelectorAsync("input[name='username']", selectorOptions);
+            await page.WaitForSelectorAsync("input[name='password']", selectorOptions);
+        }
+        catch (WaitTaskTimeoutException)
+        {
+            Cookies = await page.GetCookiesAsync();
+
+            if (Cookies.Any(x => x.Name == "sessionid"))
+            {
+                logger.LogInformation("Instagram login form was not shown; existing session cookie is active");
+                return Cookies;
+            }
+
+            throw;
+        }
+
+        if (string.IsNullOrWhiteSpace(login) || string.IsNullOrWhiteSpace(password))
+        {
+            logger.LogWarning("Instagram login form was shown, but login/password are not configured");
+            Cookies = await page.GetCookiesAsync();
+            return Cookies;
+        }
+
         await Task.Delay(random.Next(800, 1000));
         await page.TypeAsync("input[name='username']", login, typeOptions);
         await Task.Delay(random.Next(500, 1000));
