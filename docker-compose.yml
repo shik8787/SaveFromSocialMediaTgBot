@@ -1,21 +1,41 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   bot:
     image: shik8787/savefromsocialmediatgbot:arm64
     container_name: savefromsocialmedia-bot
+    init: true
     env_file:
       - .env
     environment:
       REDIS_CONNECTION_STRING: redis:6379,abortConnect=false
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+    shm_size: "256m"
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    pids_limit: 256
+    logging: *default-logging
     restart: unless-stopped
+    stop_grace_period: 30s
 
   redis:
     image: redis:7-alpine
     container_name: savefromsocialmedia-redis
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --appendfsync everysec --auto-aof-rewrite-percentage 100 --auto-aof-rewrite-min-size 16mb
     volumes:
       - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging: *default-logging
     restart: unless-stopped
 
 volumes:

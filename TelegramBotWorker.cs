@@ -21,6 +21,8 @@ public class TelegramBotWorker(
             receiverOptions: new ReceiverOptions { AllowedUpdates = [] },
             cancellationToken: stoppingToken
         );
+
+        await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken);
     }
 
     private async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken ct)

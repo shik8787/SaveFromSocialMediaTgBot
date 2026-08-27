@@ -17,7 +17,7 @@ public class YoutubeVideoScraper(HttpClient client) : IVideoScraper
     public async Task<ScrapedMedia> GetMediaAsync(string url)
     {
         var videoUrl = await GetVideoUrlsAsync(url);
-        var stream = await client.GetStreamAsync(videoUrl);
+        var stream = await client.GetOwnedStreamAsync(videoUrl);
         return new ScrapedMedia(stream, MediaType.Video);
     }
 
@@ -62,7 +62,7 @@ public class YoutubeVideoScraper(HttpClient client) : IVideoScraper
 
         await Task.Delay(new Random().Next(500, 1500));
 
-        var response = await client.SendAsync(request);
+        using var response = await client.SendAsync(request);
         response.EnsureSuccessStatusCode();
 
         var responseBody = await response.Content.ReadAsStringAsync();
@@ -97,7 +97,7 @@ public class YoutubeVideoScraper(HttpClient client) : IVideoScraper
         request.Headers.Add("Accept", "application/json, text/plain, */*");
         request.Headers.Add("Accept-Language", "en-US,en;q=0.9");
 
-        var response = await client.SendAsync(request);
+        using var response = await client.SendAsync(request);
         var responseBody = await response.Content.ReadAsStringAsync();
 
         var match = pattern.Match(responseBody);

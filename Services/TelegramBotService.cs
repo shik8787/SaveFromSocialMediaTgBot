@@ -11,12 +11,15 @@ namespace SaveFromSocialMediaTgBot.Services;
 public class TelegramBotService(
     ScraperService scraperService,
     ICacheService cacheService,
-    ILogger<TelegramBotService> logger) : ITelegramBotService
+    ILogger<TelegramBotService> logger,
+    IConfiguration configuration) : ITelegramBotService
 {
+    private readonly SemaphoreSlim mediaConcurrency = CreateMediaConcurrency(configuration);
+
     public async Task UpdateWorkflowAsync(ITelegramBotClient client, Update update, CancellationToken ct)
     {
         var chatSettings = await cacheService.GetOrCreateAsync(update.Message!.Chat.Id.ToString(),
-            async () => new ChatSettings(), ct);
+            () => Task.FromResult(new ChatSettings()), ct);
         var botInfo = await client.GetMe(cancellationToken: ct);
         var message = new ParsedMessage(update.Message, botInfo.Username!, chatSettings);
 
@@ -57,7 +60,7 @@ public class TelegramBotService(
         }
 
         var chatSettings = await cacheService.GetOrCreateAsync(model.ChatId.ToString(),
-            async () => new ChatSettings(), ct);
+            () => Task.FromResult(new ChatSettings()), ct);
 
         var changed = false;
 
@@ -185,22 +188,39 @@ public class TelegramBotService(
         await client.SetMessageReaction(message.ChatId, message.Id, ["\ud83d\udc40"],
             cancellationToken: ct);
 
-        var media = await scraperService.GetMediaAsync(message.VideoLink!);
-
-        if (media.Items.Count == 1)
+        await mediaConcurrency.WaitAsync(ct);
+        try
         {
-            await SendSingleMediaAsync(client, message, media.Items[0], ct);
-        }
-        else
-        {
-            await SendMediaGroupAsync(client, message, media.Items, ct);
-        }
+            await using var media = await scraperService.GetMediaAsync(message.VideoLink!);
 
-        await client.SetMessageReaction(message.ChatId, message.Id, ["\ud83d\udcaf"],
-            cancellationToken: ct);
-        
-        if (message.Settings.DeleteOriginMessage)
-            await client.DeleteMessage(message.ChatId, message.Id, ct);
+            if (media.Items.Count == 1)
+            {
+                await SendSingleMediaAsync(client, message, media.Items[0], ct);
+            }
+            else
+            {
+                await SendMediaGroupAsync(client, message, media.Items, ct);
+            }
+
+            logger.LogInformation("Sent {MediaCount} media item(s)", media.Items.Count);
+
+            await client.SetMessageReaction(message.ChatId, message.Id, ["\ud83d\udcaf"],
+                cancellationToken: ct);
+
+            if (message.Settings.DeleteOriginMessage)
+                await client.DeleteMessage(message.ChatId, message.Id, ct);
+        }
+        finally
+        {
+            mediaConcurrency.Release();
+        }
+    }
+
+    private static SemaphoreSlim CreateMediaConcurrency(IConfiguration configuration)
+    {
+        var configured = configuration[EnvironmentConstants.MAX_CONCURRENT_MEDIA];
+        var limit = int.TryParse(configured, out var value) && value > 0 ? value : 1;
+        return new SemaphoreSlim(limit, limit);
     }
 
     private static async Task SendSingleMediaAsync(

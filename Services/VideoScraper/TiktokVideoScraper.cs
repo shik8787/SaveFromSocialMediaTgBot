@@ -19,21 +19,17 @@ public class TiktokVideoScraper(
 
     public async Task<ScrapedMedia> GetMediaAsync(string url)
     {
-        logger.LogInformation("Start processing {Url}", url);
+        logger.LogDebug("Start processing {Url}", url);
 
         var videoUrl = await GetVideoLinkAsync(client, url) ??
                        throw new FormatException(MessageConstants.ERROR_EMPTY_URL);
         
-        logger.LogInformation("Video URL resolved for {Url}", url);
+        logger.LogDebug("Video URL resolved for {Url}", url);
 
         var request = new HttpRequestMessage(HttpMethod.Get, videoUrl) { Headers = { Referrer = new Uri(url) } };
+        var stream = await client.GetOwnedStreamAsync(request);
 
-        var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-        response.EnsureSuccessStatusCode();
-
-        var stream = await response.Content.ReadAsStreamAsync();
-
-        logger.LogInformation("Stream opened successfully for {Url}", url);
+        logger.LogDebug("Stream opened successfully for {Url}", url);
 
         return new ScrapedMedia(stream, MediaType.Video);
     }
@@ -44,7 +40,7 @@ public class TiktokVideoScraper(
         {
             logger.LogDebug("Fetching metadata (attempt {Attempt}) for {Url}", attempt, url);
 
-            var response = await httpClient.GetAsync(url);
+            using var response = await httpClient.GetAsync(url);
             response.EnsureSuccessStatusCode();
 
             var content = await response.Content.ReadAsStringAsync();
@@ -52,7 +48,7 @@ public class TiktokVideoScraper(
             var match = pattern.Match(content);
             if (match.Success)
             {
-                logger.LogInformation("Video extracted on attempt {Attempt} for {Url}", attempt, url);
+                logger.LogDebug("Video extracted on attempt {Attempt} for {Url}", attempt, url);
 
                 return match.Value.Replace("\\u002F", "/");
             }

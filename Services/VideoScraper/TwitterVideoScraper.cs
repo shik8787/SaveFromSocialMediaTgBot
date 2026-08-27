@@ -62,24 +62,24 @@ public class TwitterVideoScraper(
 
     public async Task<ScrapedMedia> GetMediaAsync(string url)
     {
-        logger.LogInformation("Start processing {Url}", url);
+        logger.LogDebug("Start processing {Url}", url);
 
         var postId = GetPostId(url);
 
         var videoUrl = (await GetVideoUrlsAsync(postId)).FirstOrDefault() ?? throw new FormatException(MessageConstants.ERROR_EMPTY_URL);
 
-        logger.LogInformation("Video URL resolved for {Url}", url);
+        logger.LogDebug("Video URL resolved for {Url}", url);
 
-        var stream = await client.GetStreamAsync(videoUrl);
+        var stream = await client.GetOwnedStreamAsync(videoUrl);
         
-        logger.LogInformation("Stream opened successfully for {Url}", url);
+        logger.LogDebug("Stream opened successfully for {Url}", url);
 
         return new ScrapedMedia(stream, MediaType.Video);
     }
 
     private async Task<List<string>> GetVideoUrlsAsync(string postId)
     {
-        logger.LogInformation("Fetching video URLs via GraphQL for PostId {PostId}", postId);
+        logger.LogDebug("Fetching video URLs via GraphQL for PostId {PostId}", postId);
 
         await SetCookiesAsync();
 
@@ -91,10 +91,10 @@ public class TwitterVideoScraper(
 
         logger.LogDebug("GraphQL request URL prepared for PostId {PostId}", postId);
 
-        var response = await client.GetAsync(url);
+        using var response = await client.GetAsync(url);
         response.EnsureSuccessStatusCode();
 
-        logger.LogInformation("GraphQL response status: {StatusCode} for PostId {PostId}", (int)response.StatusCode, postId);
+        logger.LogDebug("GraphQL response status: {StatusCode} for PostId {PostId}", (int)response.StatusCode, postId);
 
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var media = json.RootElement.GetProperty("data").GetProperty("tweetResult").GetProperty("result")
@@ -117,7 +117,7 @@ public class TwitterVideoScraper(
             }
         }
 
-        logger.LogInformation("Found {VideoCount} video URLs for PostId {PostId}", videoUrls.Count, postId);
+        logger.LogDebug("Found {VideoCount} video URLs for PostId {PostId}", videoUrls.Count, postId);
 
         return videoUrls;
     }
@@ -134,7 +134,7 @@ public class TwitterVideoScraper(
     {
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", authorization);
         client.DefaultRequestHeaders.Remove("x-guest-token");
-        var response = await client.PostAsync("https://api.x.com/1.1/guest/activate.json", null);
+        using var response = await client.PostAsync("https://api.x.com/1.1/guest/activate.json", null);
         response.EnsureSuccessStatusCode();
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var token = json.RootElement.GetProperty("guest_token").GetString();

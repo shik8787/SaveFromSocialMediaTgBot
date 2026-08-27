@@ -28,12 +28,22 @@ public class InstagramVideoScraper(
     };
     private readonly WaitForSelectorOptions selectorOptions = new() { Timeout = 30_000 };
     private readonly TypeOptions typeOptions = new() { Delay = 150 };
+    private static readonly SemaphoreSlim BrowserConcurrency = new(1, 1);
 
     private readonly LaunchOptions launchOptions = new()
     {
         Headless = true,
         ExecutablePath = "/usr/bin/chromium",
-        Args = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+        Args =
+        [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-background-networking",
+            "--disable-component-update",
+            "--disable-sync",
+            "--disk-cache-size=0",
+            "--media-cache-size=0"
+        ]
     };
 
     private static CookieParam[]? Cookies { get; set; }
@@ -44,86 +54,105 @@ public class InstagramVideoScraper(
 
     public async Task<ScrapedMedia> GetMediaAsync(string url)
     {
-        logger.LogInformation("Start processing {Url}", url);
+        logger.LogDebug("Start processing {Url}", url);
 
         var media = await TryGetMediaUrlsAsync(url);
         if (media.Count == 0)
             throw new FormatException(MessageConstants.ERROR_EMPTY_URL);
 
-        logger.LogInformation("{MediaCount} media URL(s) resolved for {Url}", media.Count, url);
+        logger.LogDebug("{MediaCount} media URL(s) resolved for {Url}", media.Count, url);
 
         var items = new List<ScrapedMediaItem>();
-        foreach (var item in media)
+        try
         {
-            var stream = await client.GetStreamAsync(item.Url);
-            items.Add(new ScrapedMediaItem(stream, item.Type));
+            foreach (var item in media)
+            {
+                var stream = await client.GetOwnedStreamAsync(item.Url);
+                items.Add(new ScrapedMediaItem(stream, item.Type));
+            }
+        }
+        catch
+        {
+            await Task.WhenAll(items.Select(item => item.Stream.DisposeAsync().AsTask()));
+            throw;
         }
 
-        logger.LogInformation("{MediaCount} stream(s) opened successfully for {Url}", items.Count, url);
+        logger.LogDebug("{MediaCount} stream(s) opened successfully for {Url}", items.Count, url);
 
         return new ScrapedMedia(items);
     }
 
     private async Task<IReadOnlyList<(string Url, MediaType Type)>> TryGetMediaUrlsAsync(string pageUrl)
     {
-        var linkType = GetInstagramLinkType(pageUrl);
-        pageUrl = NormalizePageUrl(pageUrl);
-
-        await using var browser = await Puppeteer.LaunchAsync(launchOptions);
-        await using var page = await browser.NewPageAsync();
-
+        await BrowserConcurrency.WaitAsync();
         try
         {
-            await SetCookiesAsync(page);
+            var linkType = GetInstagramLinkType(pageUrl);
+            pageUrl = NormalizePageUrl(pageUrl);
 
-            for (var attempt = 1; attempt <= 2; attempt++)
+            await using var browser = await Puppeteer.LaunchAsync(launchOptions);
+            await using var page = await browser.NewPageAsync();
+
+            try
             {
-                logger.LogDebug("Fetching page (attempt {Attempt}) for {Url}", attempt, pageUrl);
+                await SetCookiesAsync(page);
 
-                await page.GoToAsync(pageUrl, navigationOptions);
-                var content = await page.GetContentAsync();
-                content = DecodeContent(content);
-
-                var media = ExtractMediaUrls(content, linkType);
-                if (media.Count > 0)
+                for (var attempt = 1; attempt <= 2; attempt++)
                 {
-                    logger.LogInformation("{MediaCount} media item(s) extracted on attempt {Attempt} for {Url}",
-                        media.Count, attempt, pageUrl);
-                    return media;
+                    logger.LogDebug("Fetching page (attempt {Attempt}) for {Url}", attempt, pageUrl);
+
+                    await page.GoToAsync(pageUrl, navigationOptions);
+                    if (linkType == InstagramLinkType.Unknown)
+                        linkType = GetInstagramLinkType(page.Url);
+
+                    var content = await page.GetContentAsync();
+                    content = DecodeContent(content);
+
+                    var media = ExtractMediaUrls(content, linkType);
+                    if (media.Count > 0)
+                    {
+                        logger.LogDebug("{MediaCount} media item(s) extracted on attempt {Attempt} for {Url}",
+                            media.Count, attempt, pageUrl);
+                        return media;
+                    }
+
+                    if (attempt == 1)
+                    {
+                        var hasCredentials = !string.IsNullOrWhiteSpace(login) && !string.IsNullOrWhiteSpace(password);
+                        var hasCookies = Cookies is { Length: > 0 };
+
+                        if (!hasCredentials && !hasCookies)
+                        {
+                            logger.LogWarning(
+                                "Media not found for {Url}, and Instagram credentials/cookies are not configured; skipping re-authorization",
+                                pageUrl);
+                            break;
+                        }
+
+                        logger.LogDebug("Media not found, re-authorizing for {Url}", pageUrl);
+                        try
+                        {
+                            await page.SetCookieAsync(await AuthorizationAsync(page));
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "Instagram re-authorization failed for {Url}", pageUrl);
+                            break;
+                        }
+                    }
                 }
 
-                if (attempt == 1)
-                {
-                    var hasCredentials = !string.IsNullOrWhiteSpace(login) && !string.IsNullOrWhiteSpace(password);
-                    var hasCookies = Cookies is { Length: > 0 };
-
-                    if (!hasCredentials && !hasCookies)
-                    {
-                        logger.LogWarning(
-                            "Media not found for {Url}, and Instagram credentials/cookies are not configured; skipping re-authorization",
-                            pageUrl);
-                        break;
-                    }
-
-                    logger.LogDebug("Media not found, re-authorizing for {Url}", pageUrl);
-                    try
-                    {
-                        await page.SetCookieAsync(await AuthorizationAsync(page));
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning(ex, "Instagram re-authorization failed for {Url}", pageUrl);
-                        break;
-                    }
-                }
+                return [];
             }
-
-            return [];
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Metadata fetch failed for {Url}", pageUrl);
+                throw;
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            logger.LogError(ex, "Metadata fetch failed for {Url}", pageUrl);
-            throw;
+            BrowserConcurrency.Release();
         }
     }
 
@@ -145,35 +174,138 @@ public class InstagramVideoScraper(
 
     private List<(string Url, MediaType Type)> ExtractPostMediaUrls(string content)
     {
-        var matches = new List<(int Index, string Url, MediaType Type)>();
-        var isCarousel = IsCarouselContent(content);
-
-        matches.AddRange(videoPattern.Matches(content)
-            .Select(match => (match.Index, match.Groups["url"].Value, MediaType.Video)));
-
-        if (!isCarousel && matches.Count > 0)
-            return [matches.OrderBy(x => x.Index).Select(x => (x.Url, x.Type)).First()];
-
-        matches.AddRange(photoPattern.Matches(content)
-            .Select(match => (match.Index, match.Groups["url"].Value, MediaType.Photo)));
-
-        if (matches.Count == 0)
+        if (IsCarouselContent(content))
         {
-            matches.AddRange(displayPhotoPattern.Matches(content)
-                .Select(match => (match.Index, match.Groups["url"].Value, MediaType.Photo)));
+            var carousel = ExtractCarouselMediaUrls(content);
+            if (carousel.Count > 0)
+                return carousel;
         }
 
-        var result = matches
-            .Where(x => !string.IsNullOrWhiteSpace(x.Url))
-            .OrderBy(x => x.Index)
-            .DistinctBy(x => x.Url)
-            .Take(MAX_TELEGRAM_ALBUM_ITEMS)
-            .Select(x => (x.Url, x.Type))
-            .ToList();
+        var video = videoPattern.Match(content);
+        if (video.Success)
+            return [(video.Groups["url"].Value, MediaType.Video)];
 
-        return isCarousel
-            ? result
-            : result.Take(1).ToList();
+        var photo = photoPattern.Match(content);
+        if (!photo.Success)
+            photo = displayPhotoPattern.Match(content);
+
+        return photo.Success
+            ? [(photo.Groups["url"].Value, MediaType.Photo)]
+            : [];
+    }
+
+    private List<(string Url, MediaType Type)> ExtractCarouselMediaUrls(string content)
+    {
+        foreach (var marker in new[] { "\"carousel_media\"", "\"edge_sidecar_to_children\"" })
+        {
+            var markerIndex = content.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            while (markerIndex >= 0)
+            {
+                var arrayStart = content.IndexOf('[', markerIndex + marker.Length);
+                if (arrayStart >= 0 && arrayStart - markerIndex <= 500)
+                {
+                    var result = ExtractMediaFromArray(content, arrayStart);
+                    if (result.Count > 0)
+                        return result;
+                }
+
+                markerIndex = content.IndexOf(marker, markerIndex + marker.Length,
+                    StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        return [];
+    }
+
+    private List<(string Url, MediaType Type)> ExtractMediaFromArray(string content, int arrayStart)
+    {
+        var result = new List<(string Url, MediaType Type)>();
+        var arrayDepth = 0;
+        var objectDepth = 0;
+        var objectStart = -1;
+        var inString = false;
+        var escaped = false;
+
+        for (var i = arrayStart; i < content.Length; i++)
+        {
+            var ch = content[i];
+            if (inString)
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                }
+                else if (ch == '\\')
+                {
+                    escaped = true;
+                }
+                else if (ch == '"')
+                {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inString = true;
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                arrayDepth++;
+                continue;
+            }
+
+            if (ch == ']')
+            {
+                arrayDepth--;
+                if (arrayDepth == 0)
+                    break;
+                continue;
+            }
+
+            if (ch == '{')
+            {
+                if (arrayDepth == 1 && objectDepth == 0)
+                    objectStart = i;
+                objectDepth++;
+                continue;
+            }
+
+            if (ch != '}' || objectDepth == 0)
+                continue;
+
+            objectDepth--;
+            if (arrayDepth != 1 || objectDepth != 0 || objectStart < 0)
+                continue;
+
+            var item = content.Substring(objectStart, i - objectStart + 1);
+            var video = videoPattern.Match(item);
+            if (video.Success)
+            {
+                result.Add((video.Groups["url"].Value, MediaType.Video));
+            }
+            else
+            {
+                var photo = photoPattern.Match(item);
+                if (!photo.Success)
+                    photo = displayPhotoPattern.Match(item);
+                if (photo.Success)
+                    result.Add((photo.Groups["url"].Value, MediaType.Photo));
+            }
+
+            objectStart = -1;
+            if (result.Count == MAX_TELEGRAM_ALBUM_ITEMS)
+                break;
+        }
+
+        return result
+            .Where(item => !string.IsNullOrWhiteSpace(item.Url))
+            .DistinctBy(item => item.Url)
+            .ToList();
     }
 
     private static bool IsCarouselContent(string content)
@@ -190,23 +322,16 @@ public class InstagramVideoScraper(
 
         var path = uri.AbsolutePath;
 
-        if (HasImageIndex(uri))
-            return InstagramLinkType.PhotoPost;
-
         if (path.StartsWith("/reel/", StringComparison.OrdinalIgnoreCase)
-            || path.StartsWith("/tv/", StringComparison.OrdinalIgnoreCase)
-            || path.StartsWith("/p/", StringComparison.OrdinalIgnoreCase))
+            || path.StartsWith("/tv/", StringComparison.OrdinalIgnoreCase))
         {
             return InstagramLinkType.Video;
         }
 
-        return InstagramLinkType.Unknown;
-    }
+        if (path.StartsWith("/p/", StringComparison.OrdinalIgnoreCase))
+            return InstagramLinkType.Post;
 
-    private static bool HasImageIndex(Uri uri)
-    {
-        var query = HttpUtility.ParseQueryString(uri.Query);
-        return !string.IsNullOrWhiteSpace(query["img_index"]);
+        return InstagramLinkType.Unknown;
     }
 
     private async Task SetCookiesAsync(IPage page)
@@ -308,6 +433,6 @@ public class InstagramVideoScraper(
     {
         Unknown,
         Video,
-        PhotoPost
+        Post
     }
 }

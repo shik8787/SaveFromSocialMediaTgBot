@@ -1,5 +1,4 @@
 using System.Net;
-using PuppeteerSharp;
 using SaveFromSocialMediaTgBot.Data.Constants;
 using SaveFromSocialMediaTgBot.Interfaces;
 using SaveFromSocialMediaTgBot.Logging;
@@ -24,9 +23,6 @@ public static class AppBuilderExtension
 
     internal static void AddVideoScrapers(this IServiceCollection services)
     {
-        // Puppeteer client for instagram
-        new BrowserFetcher().DownloadAsync();
-
         services.AddHttpClient<IVideoScraper, InstagramVideoScraper>();
         services.AddHttpClient<IVideoScraper, TwitterVideoScraper>();
         services.AddHttpClient<IVideoScraper, YoutubeVideoScraper>();
