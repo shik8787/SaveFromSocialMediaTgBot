@@ -1,6 +1,6 @@
 services:
   bot:
-    image: shik8787/savefromsocialmediatgbot:arm64
+    image: shik8787/savefromsocialmediatgbot:amd64
     container_name: savefromsocialmedia-bot
     env_file:
       - .env
